@@ -1,7 +1,7 @@
 
 # AwsStorageApi
 
-This project is to save, read and delete files on AWS S3.
+This project is for saving, reading and deleting files in AWS S3 with .NET 7.
 
 
 ## Documentation
