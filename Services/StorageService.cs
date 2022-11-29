@@ -1,5 +1,7 @@
+using System.Net;
 using Amazon.Runtime;
 using Amazon.S3;
+using Amazon.S3.Model;
 using Amazon.S3.Transfer;
 using AwsStorageApi.Models;
 using AwsStorageApi.Services.Interfaces;
@@ -10,34 +12,59 @@ namespace AwsStorageApi.Services;
 public class StorageService : IStorageService
 {
     private readonly AwsConfiguration _awsConfiguration;
+    private readonly IAmazonS3 _awsS3Client;
 
     public StorageService(IOptions<AwsConfiguration> options)
     {
         _awsConfiguration = options.Value;
+        var credentials = new BasicAWSCredentials(_awsConfiguration.AccessKey, _awsConfiguration.SecretKey);
+        _awsS3Client = new AmazonS3Client(credentials, Amazon.RegionEndpoint.SAEast1);
     }
 
-    public Task<bool> DeleteFileAsync(string fileName, string versionId = "")
+    public async Task DeleteFileAsync(string fileName)
     {
-        throw new NotImplementedException();
+        var request = new DeleteObjectRequest
+        {
+            BucketName = _awsConfiguration.BucketName,
+            Key = fileName
+        };
+
+        await _awsS3Client.DeleteObjectAsync(request);
     }
 
-    public Task<byte[]> DownloadFileAsync(string file)
+    public async Task<byte[]> DownloadFileAsync(string file)
     {
-        throw new NotImplementedException();
+        MemoryStream? ms = null;
+
+        var getObjectRequest = new GetObjectRequest
+        {
+            BucketName = _awsConfiguration.BucketName,
+            Key = file
+        };
+
+        using (var response = await _awsS3Client.GetObjectAsync(getObjectRequest))
+        {
+            if (response.HttpStatusCode == HttpStatusCode.OK)
+            {
+                using (ms = new MemoryStream())
+                {
+                    await response.ResponseStream.CopyToAsync(ms);
+                }
+            }
+        }
+
+        if (ms is null || ms.ToArray().Length < 1)
+            throw new FileNotFoundException($"The document '{file}' is not found");
+
+        return ms.ToArray();
     }
 
     public async Task<AwsS3Response> UploadFileAsync(AwsS3Request awsS3Request)
     {
-        var credentials = new BasicAWSCredentials(_awsConfiguration.AccessKey, _awsConfiguration.SecretKey);
-        var config = new AmazonS3Config()
-        {
-            RegionEndpoint = Amazon.RegionEndpoint.SAEast1
-        };
-
         var response = new AwsS3Response();
         try
         {
-            var uploadRequest = new TransferUtilityUploadRequest()
+            var uploadRequest = new TransferUtilityUploadRequest
             {
                 InputStream = awsS3Request.InputStream,
                 Key = awsS3Request.Name,
@@ -45,9 +72,7 @@ public class StorageService : IStorageService
                 CannedACL = S3CannedACL.NoACL
             };
 
-            using var client = new AmazonS3Client(credentials, config);
-
-            var transferUtility = new TransferUtility(client);
+            var transferUtility = new TransferUtility(_awsS3Client);
 
             await transferUtility.UploadAsync(uploadRequest);
 
@@ -66,5 +91,32 @@ public class StorageService : IStorageService
         }
 
         return response;
+    }
+
+    public bool IsFileExists(string fileName)
+    {
+        try
+        {
+            var request = new GetObjectMetadataRequest
+            {
+                BucketName = _awsConfiguration.BucketName,
+                Key = fileName
+            };
+
+            var result = _awsS3Client.GetObjectMetadataAsync(request).Result;
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (ex.InnerException is not AmazonS3Exception awsEx) throw;
+            if (string.Equals(awsEx.ErrorCode, "NoSuchBucket"))
+                return false;
+
+            if (string.Equals(awsEx.ErrorCode, "NotFound"))
+                return false;
+
+            throw;
+        }
     }
 }
